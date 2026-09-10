@@ -21,7 +21,16 @@ Q33 = (slice(6,9),slice(6,9))
 Q = [Q11,Q12,Q13,Q21,Q22,Q23,Q31,Q32,Q33]
 
 def decide_Q(r:int,c:int) -> tuple[slice,slice]:
-    """Docs"""
+    """Find the 3x3 box that a grid cell belongs to.
+
+    Args:
+        r: Row index of the cell (0-8).
+        c: Column index of the cell (0-8).
+
+    Returns:
+        The (row_slice, col_slice) pair, one of Q11..Q33, that selects the
+        3x3 box containing (r, c).
+    """
     if r<3:
         if c<3:
             return Q11
@@ -46,6 +55,19 @@ def decide_Q(r:int,c:int) -> tuple[slice,slice]:
 
 
 def create_box_shapes(i:int,direction:str='horizontal') -> np.ndarray:
+    """Build a 3x3 boolean mask marking one row or column of a box.
+
+    Used to precompute box_check, which is later used to test whether a
+    box's remaining candidates for a digit all line up in a single row or
+    column (see resolving_pointing_numbers).
+
+    Args:
+        i: Index (0-2) of the row or column to mark True within the 3x3 box.
+        direction: 'horizontal' marks row i, anything else marks column i.
+
+    Returns:
+        A 3x3 boolean array with row/column i set to True and the rest False.
+    """
     t = np.zeros(3*3,dtype='bool').reshape(3,3)
     if direction=='horizontal':
         t[i,:]=True
@@ -65,6 +87,20 @@ check_vector3 = np.zeros(9,dtype='bool')
 check_vector3[6:]=True
 
 def cleanup_matrix(matrix:np.ndarray) -> np.ndarray:
+    """Clear leftover candidates in cells that already hold a solved digit.
+
+    A solved cell has value 10 on its solved digit's layer; if other layers
+    at that cell still hold stray 1 candidates, the per-cell sum across
+    layers exceeds 10. This zeroes out every layer except the solved one
+    for such cells.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+
+    Returns:
+        The same matrix, with stray candidates removed from solved cells.
+    """
     rows,cols = np.where(matrix.sum(axis=0)>10)
     for i in range(matrix.shape[0]):
         for r,c in zip(rows,cols):
@@ -74,6 +110,22 @@ def cleanup_matrix(matrix:np.ndarray) -> np.ndarray:
     return matrix
 
 def resolve_ones(matrix:np.ndarray,binary_mask:np.ndarray) -> np.ndarray:
+    """Apply the naked-singles technique to cells with exactly one candidate.
+
+    For each flagged cell, finds the one digit layer still holding a 1
+    (its only remaining candidate), marks it solved (10) there, and
+    eliminates that digit from the rest of the cell's row, column and box.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+        binary_mask: 9x9 boolean array, True at cells whose candidate count
+            (summed across digit layers) is exactly 1.
+
+    Returns:
+        The same matrix, with naked singles resolved and their digit
+        eliminated from peer cells.
+    """
     rows,cols = np.where(binary_mask)
     for i in range(matrix.shape[0]):
         for r,c in zip(rows,cols):
@@ -86,6 +138,20 @@ def resolve_ones(matrix:np.ndarray,binary_mask:np.ndarray) -> np.ndarray:
     return matrix
 
 def resolve_hidden_singles(matrix:np.ndarray) -> np.ndarray:
+    """Apply the hidden-singles technique to every digit layer.
+
+    For each digit layer, checks every row, column and box; if only one
+    cell in that unit can still hold the digit, marks it solved (10) there
+    and eliminates the digit from the rest of the cell's row, column and
+    box.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+
+    Returns:
+        The same matrix, with hidden singles resolved.
+    """
     for i in range(matrix.shape[0]):
         layer = matrix[i]
         for r in range(9):
@@ -118,6 +184,19 @@ def resolve_hidden_singles(matrix:np.ndarray) -> np.ndarray:
     return matrix
 
 def resolving_pointing_numbers(matrix:np.ndarray) -> np.ndarray:
+    """Apply the pointing pairs/triples technique to every digit layer.
+
+    For each box, if the digit's 2 or 3 remaining candidates within the box
+    all line up in a single row or column, the digit is eliminated as a
+    candidate from the rest of that row or column outside the box.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+
+    Returns:
+        The same matrix, with pointing pairs/triples eliminations applied.
+    """
     for i in range(matrix.shape[0]):
         layer = matrix[i]
         for q in Q:
@@ -137,6 +216,28 @@ def resolving_pointing_numbers(matrix:np.ndarray) -> np.ndarray:
     return matrix
 
 def clean_box(matrix:np.ndarray,index:int,Q:tuple[slice,slice],fill_boolean:np.ndarray,row:bool=True) -> np.ndarray:
+    """Restrict one digit layer's candidates within a box to a single row/column.
+
+    Clears every candidate in the given box, then restores candidates only
+    at the positions flagged in fill_boolean along the given row (or
+    column) index. Used by resolving_claiming_boxes to remove a digit's
+    candidates from the rest of a box once its remaining candidates in a
+    row/column are known to all fall inside that box.
+
+    Args:
+        matrix: One digit layer (9x9) of the candidate matrix, modified
+            in place.
+        index: Row index (if row=True) or column index (if row=False) to
+            restore candidates on.
+        Q: (row_slice, col_slice) selecting the box to clear.
+        fill_boolean: 1D boolean array (length 9) marking which columns
+            (if row=True) or rows (if row=False) to restore as candidates.
+        row: If True, index/fill_boolean address a row; otherwise a column.
+
+    Returns:
+        The same layer, with the box cleared except for the restored
+        row/column positions.
+    """
     matrix[Q]=0
     if row:
         matrix[index,fill_boolean]=1
@@ -145,6 +246,19 @@ def clean_box(matrix:np.ndarray,index:int,Q:tuple[slice,slice],fill_boolean:np.n
     return matrix
 
 def resolving_claiming_boxes(matrix:np.ndarray) -> np.ndarray:
+    """Apply the claiming (box-line reduction) technique to every digit layer.
+
+    For each row and column, if the digit's 2 or 3 remaining candidates all
+    fall within a single box, the digit is eliminated as a candidate from
+    the rest of that box.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+
+    Returns:
+        The same matrix, with claiming/box-line eliminations applied.
+    """
     for i in range(matrix.shape[0]):
         layer = matrix[i]
         for r in range(9):
@@ -170,6 +284,18 @@ def resolving_claiming_boxes(matrix:np.ndarray) -> np.ndarray:
     return matrix 
 
 def is_sudoku_solved(matrix:np.ndarray) -> bool:
+    """Check whether the candidate matrix represents a fully, validly solved sudoku.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col). Each cell's
+            digit is taken as the layer with the highest value (the solved
+            layer holds 10), so this assumes every cell already has a
+            single dominant layer.
+
+    Returns:
+        True if every row, column and box contains each digit 1-9 exactly
+        once; False otherwise.
+    """
     solved_sudoku = np.argmax(matrix,axis=0)+1
     sub_square_check = np.all([np.unique(solved_sudoku[q]).shape[0]==9 for q in Q])
     vertical_check = np.all([np.unique(solved_sudoku[i,:]).shape[0]==9 for i in range(solved_sudoku.shape[0])])
@@ -181,6 +307,26 @@ def is_sudoku_solved(matrix:np.ndarray) -> bool:
         return False
 
 def solving_loop(matrix:np.ndarray) -> tuple[str,np.ndarray]:
+    """Repeatedly apply logical solving techniques until progress stalls.
+
+    Alternates naked singles with hidden singles, pointing pairs/triples
+    and claiming boxes, looping until the puzzle is solved, hits a dead
+    end (some cell has no remaining candidates), stops making progress
+    (a guess is needed), or exceeds MAX_LOOP_ITERATIONS.
+
+    Args:
+        matrix: 9x9x9 candidate matrix (digit layer, row, col), modified
+            in place.
+
+    Returns:
+        A (status, matrix) tuple. status is one of:
+            'solved': the puzzle is fully and validly solved.
+            'dead end': some cell has no remaining candidates.
+            'decision': no further logical progress was made; a guess
+                (see recursive_solve) is required to continue.
+            'max iterations': MAX_LOOP_ITERATIONS was reached without
+                solving or stalling.
+    """
     continue_loop = True
     matrix = cleanup_matrix(matrix)
     remaining_ones = np.sum(matrix==1)
@@ -208,6 +354,26 @@ def solving_loop(matrix:np.ndarray) -> tuple[str,np.ndarray]:
     return 'max iterations',matrix
 
 def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndarray,int]:
+    """Backtracking search used when solving_loop stalls on a 'decision'.
+
+    Picks a cell with the fewest remaining candidates (preferring 2, then
+    falling back to more), tries each candidate digit in turn by guessing
+    it and re-running solving_loop, and recurses whenever a guess again
+    stalls at 'decision'. Returns as soon as a branch solves the puzzle;
+    otherwise backtracks and tries the next candidate/cell.
+
+    Args:
+        status: Status from the caller's last solving_loop call (e.g.
+            'decision'); used only to short-circuit if already 'solved'.
+        matrix: 9x9x9 candidate matrix (digit layer, row, col) at the point
+            where logical solving stalled.
+        depth: Current recursion depth, for tracking how many guesses were
+            made.
+
+    Returns:
+        A (status, matrix, depth) tuple. status is 'solved' if a solution
+        was found, otherwise 'dead end' if every branch failed.
+    """
     if status == 'solved':
         return status,matrix,depth
     depth += 1
@@ -239,7 +405,15 @@ def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndar
 
 
 def grid_to_coordinate_lists(grid: Grid) -> tuple[list[int], list[int], list[int]]:
-    """Parallel (rows, cols, values) — one entry per filled cell."""
+    """Extract the filled cells of a grid as parallel coordinate lists.
+
+    Args:
+        grid: 9x9 grid of ints, 0 for empty cells.
+
+    Returns:
+        (rows, cols, values): three equal-length lists, one entry per
+        filled cell, giving its row index, column index and digit (1-9).
+    """
     rows, cols, values = [], [], []
     for r in range(9):
         for c in range(9):
@@ -251,7 +425,17 @@ def grid_to_coordinate_lists(grid: Grid) -> tuple[list[int], list[int], list[int
     return rows, cols, values
 
 def matrix_to_grid(solved_sudoku: np.ndarray) -> Grid:
-    """Docs"""
+    """Convert a candidate matrix into a plain 9x9 grid of digits.
+
+    Args:
+        solved_sudoku: 9x9x9 candidate matrix (digit layer, row, col). Each
+            cell's digit is taken as the layer with the highest value (the
+            solved layer holds 10), so this assumes every cell already has
+            a single dominant layer.
+
+    Returns:
+        9x9 grid of ints (1-9) with the digit read off from each cell.
+    """
     solved_sudoku = np.argmax(solved_sudoku,axis=0)+1
     grid = [[0] * 9 for _ in range(9)]
     for r in range(9):
