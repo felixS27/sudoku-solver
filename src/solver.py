@@ -343,17 +343,17 @@ def solving_loop(matrix:np.ndarray) -> tuple[str,np.ndarray]:
         decision_check = np.sum(matrix==1)
         if np.any(matrix.sum(axis=0)==0):
             return 'dead end',matrix
-        if decision_check==remaining_ones:
-            return 'decision',matrix
         if np.all(matrix.sum(axis=0)==10) and is_sudoku_solved(matrix):
             return 'solved',matrix
+        if decision_check==remaining_ones:
+            return 'decision',matrix
         remaining_ones = decision_check
         if loop_counter > MAX_LOOP_ITERATIONS:
             break
         loop_counter += 1
     return 'max iterations',matrix
 
-def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndarray,int]:
+def recursive_solve(status:str,matrix:np.ndarray,depth:int,progress_callback:Callable[[str],None]|None=None) -> tuple[str,np.ndarray,int]:
     """Backtracking search used when solving_loop stalls on a 'decision'.
 
     Picks a cell with the fewest remaining candidates (preferring 2, then
@@ -369,6 +369,9 @@ def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndar
             where logical solving stalled.
         depth: Current recursion depth, for tracking how many guesses were
             made.
+        progress_callback: optional callback invoked with a short
+            human-readable message (e.g. "trying 4 at (2,5)") before each
+            guess.
 
     Returns:
         A (status, matrix, depth) tuple. status is 'solved' if a solution
@@ -384,6 +387,8 @@ def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndar
         r,c = int(r),int(c)
         z_index = np.where(matrix[:,r,c]==1)[0]
         for z in z_index:
+            if progress_callback is not None:
+                progress_callback(f"trying {z + 1} at ({r},{c})")
             new_matrix = matrix.copy()
             new_matrix[:,r,c] = 0
             new_matrix[z][r,:] = 0
@@ -396,7 +401,7 @@ def recursive_solve(status:str,matrix:np.ndarray,depth:int) -> tuple[str,np.ndar
             if new_status == 'solved':
                 return new_status,new_matrix,depth
             elif new_status == 'decision':
-                results_status,results_matrix,depth = recursive_solve(new_status,new_matrix,depth)
+                results_status,results_matrix,depth = recursive_solve(new_status,new_matrix,depth,progress_callback)
                 if results_status == 'solved':
                     return results_status,results_matrix,depth
             else:
@@ -477,7 +482,7 @@ def solve(grid: Grid, progress_callback: Callable[[str], None] | None = None) ->
     if status=='solved':
         return status,matrix_to_grid(sudoku_matrix)
     else:
-        status,sudoku_matrix,_ = recursive_solve(status,sudoku_matrix,0)
+        status,sudoku_matrix,_ = recursive_solve(status,sudoku_matrix,0,progress_callback)
         if status=='solved':
             return status,matrix_to_grid(sudoku_matrix)
         else:
